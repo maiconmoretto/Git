@@ -541,4 +541,34 @@ test_expect_success 'status ignores dirty submodules (except HEAD)' '
 	! grep dirty-otherwise output
 '
 
+test_expect_success 'set up pathological context' '
+	git reset --hard &&
+	test_write_lines a a a a a a a a a a a >a &&
+	git add a &&
+	git commit -m a &&
+	test_write_lines c b a a a a a a a b a a a a >a &&
+	test_write_lines     a a a a a a a b a a a a >expected-1 &&
+	test_write_lines   b a a a a a a a b a a a a >expected-2 &&
+	write_script editor <<-\EOF
+	sed /^+c/d "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+	EOF
+'
+
+test_expect_success 'add -p works with pathological context lines' '
+	git reset &&
+	printf "%s\n" n y |
+	git add -p &&
+	git cat-file blob :a > actual &&
+	test_cmp expected-1 actual
+'
+
+test_expect_success 'add -p patch editing works with pathological context lines' '
+	git reset &&
+	printf "%s\n" e y |
+	GIT_EDITOR=./editor git add -p &&
+	git cat-file blob :a > actual &&
+	test_cmp expected-2 actual
+'
+
 test_done
