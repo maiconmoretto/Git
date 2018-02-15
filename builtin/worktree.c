@@ -31,6 +31,7 @@ struct add_opts {
 	int keep_locked;
 	const char *new_branch;
 	int force_new_branch;
+	int checkout_existing_branch;
 };
 
 static int show_only;
@@ -305,7 +306,7 @@ static int add_worktree(const char *path, const char *refname,
 	strbuf_addf(&sb, "%s/commondir", sb_repo.buf);
 	write_file(sb.buf, "../..");
 
-	fprintf_ln(stderr, _("Preparing %s (identifier %s)"), path, name);
+	fprintf(stderr, _("Preparing %s (identifier %s)"), path, name);
 
 	argv_array_pushf(&child_env, "%s=%s", GIT_DIR_ENVIRONMENT, sb_git.buf);
 	argv_array_pushf(&child_env, "%s=%s", GIT_WORK_TREE_ENVIRONMENT, path);
@@ -322,10 +323,25 @@ static int add_worktree(const char *path, const char *refname,
 	if (ret)
 		goto done;
 
+	if (opts->checkout_existing_branch)
+		fprintf(stderr, _(", checking out existing branch '%s'"),
+			refname);
+	else if (opts->new_branch)
+		fprintf(stderr, _(", creating new branch '%s'"), opts->new_branch);
+
+	fprintf(stderr, _(", setting HEAD to %s"),
+		find_unique_abbrev(commit->object.oid.hash, DEFAULT_ABBREV));
+
+	strbuf_reset(&sb);
+	pp_commit_easy(CMIT_FMT_ONELINE, commit, &sb);
+	if (sb.len > 0)
+		fprintf(stderr, " %s", sb.buf);
+	fputc('\n', stderr);
+
 	if (opts->checkout) {
 		cp.argv = NULL;
 		argv_array_clear(&cp.args);
-		argv_array_pushl(&cp.args, "reset", "--hard", NULL);
+		argv_array_pushl(&cp.args, "reset", "--hard", "--quiet", NULL);
 		cp.env = child_env.argv;
 		ret = run_command(&cp);
 		if (ret)
@@ -413,14 +429,25 @@ static int add(int ac, const char **av, const char *prefix)
 	if (ac < 2 && !opts.new_branch && !opts.detach) {
 		int n;
 		const char *s = worktree_basename(path, &n);
-		opts.new_branch = xstrndup(s, n);
-		if (guess_remote) {
-			struct object_id oid;
-			const char *remote =
-				unique_tracking_name(opts.new_branch, &oid);
-			if (remote)
-				branch = remote;
+		const char *branchname = xstrndup(s, n);
+		struct strbuf ref = STRBUF_INIT;
+
+		if (!strbuf_check_branch_ref(&ref, branchname) &&
+		    ref_exists(ref.buf)) {
+			branch = branchname;
+			opts.checkout_existing_branch = 1;
+			UNLEAK(branch);
+		} else {
+			opts.new_branch = branchname;
+			if (guess_remote) {
+				struct object_id oid;
+				const char *remote =
+					unique_tracking_name(opts.new_branch, &oid);
+				if (remote)
+					branch = remote;
+			}
 		}
+		strbuf_release(&ref);
 	}
 
 	if (ac == 2 && !opts.new_branch && !opts.detach) {
