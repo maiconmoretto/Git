@@ -361,6 +361,11 @@ diff --no-index --raw dir2 dir
 diff --no-index --raw --abbrev=4 dir2 dir
 :noellipses diff --no-index --raw --abbrev=4 dir2 dir
 diff --no-index --raw --no-abbrev dir2 dir
+
+diff-tree --pretty --root --stat-with-summary initial
+diff-tree --pretty -R --root --stat-with-summary initial
+diff-tree --stat-with-summary initial mode
+diff-tree -R --stat-with-summary initial mode
 EOF
 
 test_expect_success 'log -S requires an argument' '
