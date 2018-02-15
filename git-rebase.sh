@@ -17,6 +17,7 @@ q,quiet!           be quiet. implies --no-stat
 autostash          automatically stash/stash pop before and after
 fork-point         use 'merge-base --fork-point' to refine upstream
 onto=!             rebase onto given branch instead of upstream
+recreate-merges?   try to recreate merges instead of skipping them
 p,preserve-merges! try to recreate merges instead of ignoring them
 s,strategy=!       use the given merge strategy
 no-ff!             cherry-pick all commits, even if unchanged
@@ -88,6 +89,8 @@ type=
 state_dir=
 # One of {'', continue, skip, abort}, as parsed from command line
 action=
+recreate_merges=
+rebase_cousins=
 preserve_merges=
 autosquash=
 keep_empty=
@@ -268,6 +271,19 @@ do
 		;;
 	--allow-empty-message)
 		allow_empty_message=--allow-empty-message
+		;;
+	--recreate-merges)
+		recreate_merges=t
+		test -z "$interactive_rebase" && interactive_rebase=implied
+		;;
+	--recreate-merges=*)
+		recreate_merges=t
+		case "${1#*=}" in
+		rebase-cousins) rebase_cousins=t;;
+		no-rebase-cousins) rebase_cousins=;;
+		*) die "Unknown mode: $1";;
+		esac
+		test -z "$interactive_rebase" && interactive_rebase=implied
 		;;
 	--preserve-merges)
 		preserve_merges=t
