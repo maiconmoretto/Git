@@ -172,6 +172,8 @@ struct http_get_options {
 	 * for details.
 	 */
 	struct strbuf *base_url;
+
+	struct string_list *extra_headers;
 };
 
 /* Return values for http_get_*() */
