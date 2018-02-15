@@ -2181,6 +2181,7 @@ enum resume_mode {
 	RESUME_RESOLVED,
 	RESUME_SKIP,
 	RESUME_ABORT,
+	RESUME_QUIT,
 	RESUME_SHOW_PATCH
 };
 
@@ -2282,6 +2283,9 @@ int cmd_am(int argc, const char **argv, const char *prefix)
 		OPT_CMDMODE(0, "abort", &resume,
 			N_("restore the original branch and abort the patching operation."),
 			RESUME_ABORT),
+		OPT_CMDMODE(0, "quit", &resume,
+			N_("abort the patching operation but keep HEAD where it is."),
+			RESUME_QUIT),
 		OPT_CMDMODE(0, "show-current-patch", &resume,
 			N_("show the patch being applied."),
 			RESUME_SHOW_PATCH),
@@ -2353,7 +2357,7 @@ int cmd_am(int argc, const char **argv, const char *prefix)
 		 * stray directories.
 		 */
 		if (file_exists(state.dir) && !state.rebasing) {
-			if (resume == RESUME_ABORT) {
+			if (resume == RESUME_ABORT || resume == RESUME_QUIT) {
 				am_destroy(&state);
 				am_state_release(&state);
 				return 0;
@@ -2394,6 +2398,10 @@ int cmd_am(int argc, const char **argv, const char *prefix)
 		break;
 	case RESUME_ABORT:
 		am_abort(&state);
+		break;
+	case RESUME_QUIT:
+		am_rerere_clear();
+		am_destroy(&state);
 		break;
 	case RESUME_SHOW_PATCH:
 		ret = show_patch(&state);

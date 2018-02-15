@@ -1105,7 +1105,7 @@ __git_count_arguments ()
 }
 
 __git_whitespacelist="nowarn warn error error-all fix"
-__git_am_inprogress_options="--skip --continue --resolved --abort --show-current-patch"
+__git_am_inprogress_options="--skip --continue --resolved --abort --quit --show-current-patch"
 
 _git_am ()
 {
