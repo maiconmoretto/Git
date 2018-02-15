@@ -34,12 +34,18 @@ struct ref_sorting {
 };
 
 struct ref_array_item {
-	struct object_id objectname;
+	struct object_id oid;
 	int flag;
 	unsigned int kind;
 	const char *symref;
 	struct commit *commit;
 	struct atom_value *value;
+	enum object_type type;
+	unsigned long size;
+	off_t disk_size;
+	const char *rest;
+	struct object_id *delta_base_oid;
+	const char *objectname;
 	char refname[FLEX_ARRAY];
 };
 
@@ -72,6 +78,30 @@ struct ref_filter {
 		verbose;
 };
 
+struct expand_data {
+	struct object_id oid;
+	enum object_type type;
+	unsigned long size;
+	off_t disk_size;
+	const char *rest;
+	struct object_id delta_base_oid;
+
+	/*
+	 * After a mark_query run, this object_info is set up to be
+	 * passed to sha1_object_info_extended. It will point to the data
+	 * elements above, so you can retrieve the response from there.
+	 */
+	struct object_info info;
+
+	/*
+	 * This flag will be true if the requested batch format and options
+	 * don't require us to call sha1_object_info, which can then be
+	 * optimized out.
+	 */
+	unsigned skip_object_info : 1;
+	unsigned is_cat_file : 1;
+};
+
 struct ref_format {
 	/*
 	 * Set these to define the format; make sure you call
@@ -83,6 +113,9 @@ struct ref_format {
 
 	/* Internal state to ref-filter */
 	int need_color_reset_at_eol;
+
+	unsigned all_objects : 1;
+	unsigned is_cat_file : 1;
 };
 
 #define REF_FORMAT_INIT { NULL, 0, -1 }
@@ -109,12 +142,18 @@ void ref_array_clear(struct ref_array *array);
 int verify_ref_format(struct ref_format *format);
 /*  Sort the given ref_array as per the ref_sorting provided */
 void ref_array_sort(struct ref_sorting *sort, struct ref_array *array);
-/*  Based on the given format and quote_style, fill the strbuf */
-void format_ref_array_item(struct ref_array_item *info,
+/*
+ * Based on the given format and quote_style, fill the strbuf.
+ * Return 0 if everything was successful, -1 otherwise (and strbuf remains empty)
+ */
+int format_ref_array_item(struct ref_array_item *info,
 			   const struct ref_format *format,
 			   struct strbuf *final_buf);
-/*  Print the ref using the given format and quote_style */
-void show_ref_array_item(struct ref_array_item *info, const struct ref_format *format);
+/*
+ * Print the ref using the given format and quote_style.
+ * Return 0 if everything was successful, -1 otherwise.
+ */
+int show_ref_array_item(struct ref_array_item *info, const struct ref_format *format);
 /*  Parse a single sort specifier and add it to the list */
 void parse_ref_sorting(struct ref_sorting **sorting_tail, const char *atom);
 /*  Callback function for parsing the sort option */
@@ -134,5 +173,8 @@ void setup_ref_filter_porcelain_msg(void);
  */
 void pretty_print_ref(const char *name, const unsigned char *sha1,
 		      const struct ref_format *format);
+
+/* Search for atom in given format. */
+int is_atom_used(const struct ref_format *format, const char *atom);
 
 #endif /*  REF_FILTER_H  */

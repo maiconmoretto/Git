@@ -100,6 +100,7 @@ static struct used_atom {
 	} u;
 } *used_atom;
 static int used_atom_cnt, need_tagged, need_symref;
+struct expand_data cat_file_info;
 
 static void color_atom_parser(const struct ref_format *format, struct used_atom *atom, const char *color_value)
 {
@@ -251,6 +252,32 @@ static void objectname_atom_parser(const struct ref_format *format, struct used_
 		die(_("unrecognized %%(objectname) argument: %s"), arg);
 }
 
+static void objectsize_atom_parser(const struct ref_format *format, struct used_atom *atom, const char *arg)
+{
+	if (!arg)
+		cat_file_info.info.sizep = &cat_file_info.size;
+	else if (!strcmp(arg, "disk"))
+		cat_file_info.info.disk_sizep = &cat_file_info.disk_size;
+	else
+		die(_("urecognized %%(objectsize) argument: %s"), arg);
+}
+
+static void objecttype_atom_parser(const struct ref_format *format, struct used_atom *atom, const char *arg)
+{
+	if (!arg)
+		cat_file_info.info.typep = &cat_file_info.type;
+	else
+		die(_("urecognized %%(objecttype) argument: %s"), arg);
+}
+
+static void deltabase_atom_parser(const struct ref_format *format, struct used_atom *atom, const char *arg)
+{
+	if (!arg)
+		cat_file_info.info.delta_base_sha1 = cat_file_info.delta_base_oid.hash;
+	else
+		die(_("urecognized %%(deltabase) argument: %s"), arg);
+}
+
 static void refname_atom_parser(const struct ref_format *format, struct used_atom *atom, const char *arg)
 {
 	refname_atom_parser_internal(&atom->u.refname, arg, atom->name);
@@ -325,14 +352,14 @@ static void head_atom_parser(const struct ref_format *format, struct used_atom *
 	atom->u.head = resolve_refdup("HEAD", RESOLVE_REF_READING, NULL, NULL);
 }
 
-static struct {
+static struct valid_atom {
 	const char *name;
 	cmp_type cmp_type;
 	void (*parser)(const struct ref_format *format, struct used_atom *atom, const char *arg);
 } valid_atom[] = {
 	{ "refname" , FIELD_STR, refname_atom_parser },
-	{ "objecttype" },
-	{ "objectsize", FIELD_ULONG },
+	{ "objecttype", FIELD_STR, objecttype_atom_parser },
+	{ "objectsize", FIELD_ULONG, objectsize_atom_parser },
 	{ "objectname", FIELD_STR, objectname_atom_parser },
 	{ "tree" },
 	{ "parent" },
@@ -369,6 +396,8 @@ static struct {
 	{ "if", FIELD_STR, if_atom_parser },
 	{ "then" },
 	{ "else" },
+	{ "rest" },
+	{ "deltabase", FIELD_STR, deltabase_atom_parser },
 };
 
 #define REF_FORMATTING_STATE_INIT  { 0, NULL }
@@ -692,6 +721,21 @@ static const char *find_next(const char *cp)
 	return NULL;
 }
 
+/* Search for atom in given format. */
+int is_atom_used(const struct ref_format *format, const char *atom)
+{
+	const char *cp, *sp;
+	for (cp = format->format; *cp && (sp = find_next(cp)); ) {
+		const char *ep = strchr(sp, ')');
+		int atom_len = ep - sp - 2;
+		sp += 2;
+		if (atom_len == strlen(atom) && !memcmp(sp, atom, atom_len))
+			return 1;
+		cp = ep + 1;
+	}
+	return 0;
+}
+
 /*
  * Make sure the format string is well formed, and parse out
  * the used atoms.
@@ -700,6 +744,7 @@ int verify_ref_format(struct ref_format *format)
 {
 	const char *cp, *sp;
 
+	cat_file_info.is_cat_file = format->is_cat_file;
 	format->need_color_reset_at_eol = 0;
 	for (cp = format->format; *cp && (sp = find_next(cp)); ) {
 		const char *color, *ep = strchr(sp, ')');
@@ -708,14 +753,20 @@ int verify_ref_format(struct ref_format *format)
 		if (!ep)
 			return error(_("malformed format string %s"), sp);
 		/* sp points at "%(" and ep points at the closing ")" */
-		at = parse_ref_filter_atom(format, sp + 2, ep);
-		cp = ep + 1;
 
+		at = parse_ref_filter_atom(format, sp + 2, ep);
 		if (skip_prefix(used_atom[at].name, "color:", &color))
 			format->need_color_reset_at_eol = !!strcmp(color, "reset");
+
+		cp = ep + 1;
 	}
 	if (format->need_color_reset_at_eol && !want_color(format->use_color))
 		format->need_color_reset_at_eol = 0;
+	if (cat_file_info.is_cat_file && format->all_objects) {
+		struct object_info empty = OBJECT_INFO_INIT;
+		if (!memcmp(&cat_file_info.info, &empty, sizeof(empty)))
+			cat_file_info.skip_object_info = 1;
+	}
 	return 0;
 }
 
@@ -773,8 +824,12 @@ static void grab_common_values(struct atom_value *val, int deref, struct object 
 		else if (!strcmp(name, "objectsize")) {
 			v->value = sz;
 			v->s = xstrfmt("%lu", sz);
-		}
-		else if (deref)
+		} else if (!strcmp(name, "objectsize:disk")) {
+			if (cat_file_info.is_cat_file) {
+				v->value = cat_file_info.disk_size;
+				v->s = xstrfmt("%"PRIuMAX, (uintmax_t)v->value);
+			}
+		} else if (deref)
 			grab_objectname(name, obj->oid.hash, v, &used_atom[i]);
 	}
 }
@@ -1354,10 +1409,30 @@ static const char *get_refname(struct used_atom *atom, struct ref_array_item *re
 	return show_ref(&atom->u.refname, ref->refname);
 }
 
+static int check_and_fill_for_cat(struct ref_array_item *ref)
+{
+	if (!cat_file_info.info.typep)
+		cat_file_info.info.typep = &cat_file_info.type;
+	if (!cat_file_info.skip_object_info &&
+	    sha1_object_info_extended(ref->oid.hash, &cat_file_info.info,
+				      OBJECT_INFO_LOOKUP_REPLACE) < 0) {
+		const char *e = ref->objectname;
+		printf("%s missing\n", e ? e : oid_to_hex(&ref->oid));
+		fflush(stdout);
+		return -1;
+	}
+	ref->type = cat_file_info.type;
+	ref->size = cat_file_info.size;
+	ref->disk_size = cat_file_info.disk_size;
+	ref->delta_base_oid = &cat_file_info.delta_base_oid;
+	return 0;
+}
+
 /*
  * Parse the object referred by ref, and grab needed value.
+ * Return 0 if everything was successful, -1 otherwise.
  */
-static void populate_value(struct ref_array_item *ref)
+static int populate_value(struct ref_array_item *ref)
 {
 	void *buf;
 	struct object *obj;
@@ -1373,6 +1448,9 @@ static void populate_value(struct ref_array_item *ref)
 		if (!ref->symref)
 			ref->symref = "";
 	}
+
+	if (cat_file_info.is_cat_file && check_and_fill_for_cat(ref))
+		return -1;
 
 	/* Fill in specials first */
 	for (i = 0; i < used_atom_cnt; i++) {
@@ -1439,13 +1517,22 @@ static void populate_value(struct ref_array_item *ref)
 				v->s = xstrdup(buf + 1);
 			}
 			continue;
-		} else if (!deref && grab_objectname(name, ref->objectname.hash, v, atom)) {
+		} else if (!deref && grab_objectname(name, ref->oid.hash, v, atom)) {
 			continue;
 		} else if (!strcmp(name, "HEAD")) {
 			if (atom->u.head && !strcmp(ref->refname, atom->u.head))
 				v->s = "*";
 			else
 				v->s = " ";
+			continue;
+		} else if (starts_with(name, "rest")) {
+			v->s = ref->rest ? ref->rest : "";
+			continue;
+		} else if (starts_with(name, "deltabase")) {
+			if (ref->delta_base_oid)
+				v->s = xstrdup(oid_to_hex(ref->delta_base_oid));
+			else
+				v->s = "";
 			continue;
 		} else if (starts_with(name, "align")) {
 			v->handler = align_atom_handler;
@@ -1477,19 +1564,20 @@ static void populate_value(struct ref_array_item *ref)
 
 	for (i = 0; i < used_atom_cnt; i++) {
 		struct atom_value *v = &ref->value[i];
-		if (v->s == NULL)
-			goto need_obj;
+		if (v->s == NULL) {
+			break;
+		}
 	}
-	return;
+	if (used_atom_cnt <= i)
+		return 0;
 
- need_obj:
-	buf = get_obj(&ref->objectname, &obj, &size, &eaten);
+	buf = get_obj(&ref->oid, &obj, &size, &eaten);
 	if (!buf)
 		die(_("missing object %s for %s"),
-		    oid_to_hex(&ref->objectname), ref->refname);
+		    oid_to_hex(&ref->oid), ref->refname);
 	if (!obj)
 		die(_("parse_object_buffer failed on %s for %s"),
-		    oid_to_hex(&ref->objectname), ref->refname);
+		    oid_to_hex(&ref->oid), ref->refname);
 
 	grab_values(ref->value, 0, obj, buf, size);
 	if (!eaten)
@@ -1500,7 +1588,7 @@ static void populate_value(struct ref_array_item *ref)
 	 * object, we are done.
 	 */
 	if (!need_tagged || (obj->type != OBJ_TAG))
-		return;
+		return 0;
 
 	/*
 	 * If it is a tag object, see if we use a value that derefs
@@ -1524,19 +1612,24 @@ static void populate_value(struct ref_array_item *ref)
 	grab_values(ref->value, 1, obj, buf, size);
 	if (!eaten)
 		free(buf);
+
+	return 0;
 }
 
 /*
  * Given a ref, return the value for the atom.  This lazily gets value
  * out of the object by calling populate value.
+ * Return 0 if everything was successful, -1 otherwise.
  */
-static void get_ref_atom_value(struct ref_array_item *ref, int atom, struct atom_value **v)
+static int get_ref_atom_value(struct ref_array_item *ref, int atom, struct atom_value **v)
 {
+	int retval = 0;
 	if (!ref->value) {
-		populate_value(ref);
+		retval = populate_value(ref);
 		fill_missing_values(ref->value);
 	}
 	*v = &ref->value[atom];
+	return retval;
 }
 
 /*
@@ -1834,7 +1927,7 @@ static struct ref_array_item *new_ref_array_item(const char *refname,
 {
 	struct ref_array_item *ref;
 	FLEX_ALLOC_STR(ref, refname, refname);
-	hashcpy(ref->objectname.hash, objectname);
+	hashcpy(ref->oid.hash, objectname);
 	ref->flag = flag;
 
 	return ref;
@@ -2121,12 +2214,13 @@ static void append_literal(const char *cp, const char *ep, struct ref_formatting
 	}
 }
 
-void format_ref_array_item(struct ref_array_item *info,
+int format_ref_array_item(struct ref_array_item *info,
 			   const struct ref_format *format,
 			   struct strbuf *final_buf)
 {
 	const char *cp, *sp, *ep;
 	struct ref_formatting_state state = REF_FORMATTING_STATE_INIT;
+	int retval = 0;
 
 	state.quote_style = format->quote_style;
 	push_stack_element(&state.stack);
@@ -2137,11 +2231,14 @@ void format_ref_array_item(struct ref_array_item *info,
 		ep = strchr(sp, ')');
 		if (cp < sp)
 			append_literal(cp, sp, &state);
-		get_ref_atom_value(info,
-				   parse_ref_filter_atom(format, sp + 2, ep),
-				   &atomv);
+		if (get_ref_atom_value(info,
+				       parse_ref_filter_atom(format, sp + 2, ep),
+				       &atomv))
+			return -1;
 		atomv->handler(atomv, &state);
 	}
+	if (cat_file_info.is_cat_file && strlen(format->format) == 0)
+		retval = check_and_fill_for_cat(info);
 	if (*cp) {
 		sp = cp + strlen(cp);
 		append_literal(cp, sp, &state);
@@ -2155,17 +2252,21 @@ void format_ref_array_item(struct ref_array_item *info,
 		die(_("format: %%(end) atom missing"));
 	strbuf_addbuf(final_buf, &state.stack->output);
 	pop_stack_element(&state.stack);
+	return retval;
 }
 
-void show_ref_array_item(struct ref_array_item *info,
+int show_ref_array_item(struct ref_array_item *info,
 			 const struct ref_format *format)
 {
 	struct strbuf final_buf = STRBUF_INIT;
+	int retval = format_ref_array_item(info, format, &final_buf);
 
-	format_ref_array_item(info, format, &final_buf);
-	fwrite(final_buf.buf, 1, final_buf.len, stdout);
+	if (!retval) {
+		fwrite(final_buf.buf, 1, final_buf.len, stdout);
+		putchar('\n');
+	}
 	strbuf_release(&final_buf);
-	putchar('\n');
+	return retval;
 }
 
 void pretty_print_ref(const char *name, const unsigned char *sha1,
