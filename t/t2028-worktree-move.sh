@@ -59,4 +59,88 @@ test_expect_success 'unlock worktree twice' '
 	test_path_is_missing .git/worktrees/source/locked
 '
 
+test_expect_success 'move non-worktree' '
+	mkdir abc &&
+	test_must_fail git worktree move abc def
+'
+
+test_expect_success 'move locked worktree' '
+	git worktree lock source &&
+	test_when_finished "git worktree unlock source" &&
+	test_must_fail git worktree move source destination
+'
+
+test_expect_success 'move worktree' '
+	toplevel="$(pwd)" &&
+	git worktree move source destination &&
+	test_path_is_missing source &&
+	git worktree list --porcelain | grep "^worktree.*/destination" &&
+	! git worktree list --porcelain | grep "^worktree.*/source" >empty &&
+	git -C destination log --format=%s >actual2 &&
+	echo init >expected2 &&
+	test_cmp expected2 actual2
+'
+
+test_expect_success 'move main worktree' '
+	test_must_fail git worktree move . def
+'
+
+test_expect_success 'move worktree to another dir' '
+	toplevel="$(pwd)" &&
+	mkdir some-dir &&
+	git worktree move destination some-dir &&
+	test_path_is_missing source &&
+	git worktree list --porcelain | grep "^worktree.*/some-dir/destination" &&
+	git -C some-dir/destination log --format=%s >actual2 &&
+	echo init >expected2 &&
+	test_cmp expected2 actual2
+'
+
+test_expect_success 'remove main worktree' '
+	test_must_fail git worktree remove .
+'
+
+test_expect_success 'move some-dir/destination back' '
+	git worktree move some-dir/destination destination
+'
+
+test_expect_success 'remove locked worktree' '
+	git worktree lock destination &&
+	test_when_finished "git worktree unlock destination" &&
+	test_must_fail git worktree remove destination
+'
+
+test_expect_success 'remove worktree with dirty tracked file' '
+	echo dirty >>destination/init.t &&
+	test_when_finished "git -C destination checkout init.t" &&
+	test_must_fail git worktree remove destination
+'
+
+test_expect_success 'remove worktree with untracked file' '
+	: >destination/untracked &&
+	test_must_fail git worktree remove destination
+'
+
+test_expect_success 'force remove worktree with untracked file' '
+	git worktree remove --force destination &&
+	test_path_is_missing destination
+'
+
+test_expect_success 'remove missing worktree' '
+	git worktree add to-be-gone &&
+	test -d .git/worktrees/to-be-gone &&
+	mv to-be-gone gone &&
+	git worktree remove to-be-gone &&
+	test_path_is_missing .git/worktrees/to-be-gone
+'
+
+test_expect_success 'NOT remove missing-but-locked worktree' '
+	git worktree add gone-but-locked &&
+	git worktree lock gone-but-locked &&
+	test -d .git/worktrees/gone-but-locked &&
+	mv gone-but-locked really-gone-now &&
+	test_must_fail git worktree remove gone-but-locked &&
+	test_path_is_dir .git/worktrees/gone-but-locked
+'
+
 test_done
