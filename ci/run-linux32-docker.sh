@@ -15,6 +15,7 @@ container_cache_dir=/tmp/travis-cache
 
 docker run \
 	--interactive \
+	--env BYPASS_TCLTK_CHECK \
 	--env DEVELOPER \
 	--env DEFAULT_TEST_TARGET \
 	--env GIT_PROVE_OPTS \
