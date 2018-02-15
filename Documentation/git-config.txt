@@ -233,6 +233,11 @@ See also <<FILES>>.
 	using `--file`, `--global`, etc) and `on` when searching all
 	config files.
 
+CONFIGURATION
+-------------
+`pager.config` is only respected when listing configuration, i.e., when
+`--list`, `--get` or any of `--get-*` is used. The default is to use a pager.
+
 [[FILES]]
 FILES
 -----

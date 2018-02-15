@@ -48,6 +48,11 @@ static int show_origin;
 #define ACTION_GET_COLORBOOL (1<<14)
 #define ACTION_GET_URLMATCH (1<<15)
 
+/* convenience macro for "ACTION_LIST | ACTION_GET_*" */
+#define ACTION_LIST_OR_GET (ACTION_LIST | ACTION_GET | ACTION_GET_ALL | \
+			    ACTION_GET_REGEXP | ACTION_GET_COLOR | \
+			    ACTION_GET_COLORBOOL | ACTION_GET_URLMATCH)
+
 #define TYPE_BOOL (1<<0)
 #define TYPE_INT (1<<1)
 #define TYPE_BOOL_OR_INT (1<<2)
@@ -593,6 +598,9 @@ int cmd_config(int argc, const char **argv, const char *prefix)
 			  "--get-regexp, and --list.");
 		usage_with_options(builtin_config_usage, builtin_config_options);
 	}
+
+	if (actions & ACTION_LIST_OR_GET)
+		setup_auto_pager("config", 1);
 
 	if (actions == ACTION_LIST) {
 		check_argc(argc, 0, 0);
